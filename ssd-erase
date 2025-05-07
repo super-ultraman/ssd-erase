@@ -37,13 +37,7 @@ NC='\033[0m' # No Color
 # fi
 
 # Function to check if running as root
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}${BOLD}错误: 此脚本必须以root权限运行${NC}"
-        echo "请使用sudo或以root用户身份运行"
-        exit 1
-    fi
-}
+
 
 # Function to get system serial number
 get_system_serial() {
