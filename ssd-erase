@@ -1,0 +1,262 @@
+#!/bin/bash
+
+# SSD数据擦除工具 v1.0
+# GitHub: https://github.com/yourusername/ssd-erasure
+# 
+# 用法：
+#   - 直接执行：curl -sSL https://yourdomain.xyz/ssd-erasure | sudo bash
+#   - 预览脚本：curl -sSL https://yourdomain.xyz/ssd-erasure
+#
+# 警告：此脚本将执行SSD数据擦除，所有数据将被永久删除！
+
+# ANSI color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# 检测是否通过管道执行
+if [ -t 1 ]; then
+  # 非管道执行（用户只是下载查看）
+  echo -e "${YELLOW}${BOLD}SSD数据擦除工具脚本${NC}"
+  echo -e "${RED}警告：此脚本将执行SSD数据擦除操作，所有数据将被永久删除！${NC}"
+  echo
+  echo -e "建议先审查脚本内容，确保安全后再执行。"
+  echo -e "执行方式: ${GREEN}curl -sSL https://yourdomain.xyz/ssd-erasure | sudo bash${NC}"
+  echo
+  echo -e "${YELLOW}--- 以下是脚本内容 ---${NC}"
+  cat "$0"
+  exit 0
+fi
+
+# Function to check if running as root
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}${BOLD}错误: 此脚本必须以root权限运行${NC}"
+        echo "请使用sudo或以root用户身份运行"
+        exit 1
+    fi
+}
+
+# Function to get system serial number
+get_system_serial() {
+    system_serial=$(dmidecode -s system-serial-number)
+    echo -e "${BLUE}${BOLD}系统序列号:${NC} $system_serial"
+}
+
+# Function to install required packages for NVMe
+install_nvme_tools() {
+    echo -e "\n${YELLOW}检查NVMe工具...${NC}"
+    if ! command -v nvme &> /dev/null; then
+        echo -e "${YELLOW}正在安装nvme-cli软件包...${NC}"
+        if command -v pacman &> /dev/null; then
+            pacman -Syy nvme-cli --noconfirm
+        elif command -v apt &> /dev/null; then
+            apt update && apt install -y nvme-cli
+        elif command -v dnf &> /dev/null; then
+            dnf install -y nvme-cli
+        else
+            echo -e "${RED}${BOLD}错误: 找不到软件包管理器!${NC}"
+            echo "请手动安装nvme-cli"
+            exit 1
+        fi
+        echo -e "${GREEN}NVMe工具安装成功${NC}"
+    else
+        echo -e "${GREEN}NVMe工具已安装${NC}"
+    fi
+}
+
+# Function to get available disks excluding USB devices
+get_available_disks() {
+    echo -e "\n${BLUE}${BOLD}扫描可用存储设备...${NC}"
+    
+    # Get a list of all block devices excluding partitions and USB devices
+    mapfile -t all_disks < <(lsblk -d -o NAME,SIZE,MODEL,SERIAL,TRAN,TYPE | grep -i "disk" | grep -v -i "usb")
+    
+    # Check if we have any disks
+    if [ ${#all_disks[@]} -eq 0 ]; then
+        echo -e "${RED}${BOLD}未找到内部存储设备!${NC}"
+        exit 1
+    fi
+    
+    # Print header
+    echo -e "${YELLOW}可用磁盘 (已排除USB设备):${NC}"
+    
+    # Print list header
+    echo -e "${BOLD}索引 | 设备 | 容量 | 型号 | 序列号 | 类型${NC}"
+    echo "------------------------------------------------------"
+    
+    # Print each disk with index
+    for i in "${!all_disks[@]}"; do
+        echo -e "$i | ${all_disks[$i]}"
+    done
+}
+
+# Function to select disk
+select_disk() {
+    get_available_disks
+    
+    # Get number of disks
+    disk_count=${#all_disks[@]}
+    
+    echo -e "\n${YELLOW}请选择要擦除的磁盘 (0-$((disk_count-1))):${NC}"
+    selected_index=""
+    
+    # Keep asking until we get a valid selection
+    while [[ ! $selected_index =~ ^[0-9]+$ ]] || [ "$selected_index" -ge "$disk_count" ]; do
+        echo -n "输入磁盘索引 (或 'q' 退出): "
+        read -r selected_index
+        
+        if [[ "$selected_index" == "q" ]]; then
+            echo -e "${YELLOW}操作已取消${NC}"
+            exit 0
+        fi
+    done
+    
+    # Extract device name from the selected disk
+    selected_disk=$(echo "${all_disks[$selected_index]}" | awk '{print $1}')
+    disk_info=$(echo "${all_disks[$selected_index]}")
+    
+    echo -e "\n${GREEN}已选择磁盘: /dev/$selected_disk${NC}"
+    echo -e "磁盘信息: $disk_info"
+    
+    # Determine disk type (NVMe or SATA)
+    if [[ "$selected_disk" == nvme* ]]; then
+        disk_type="nvme"
+    else
+        disk_type="sata"
+    fi
+    
+    # Additional confirmation for safety
+    echo -e "\n${RED}${BOLD}警告: /dev/$selected_disk 上的所有数据将被永久擦除!${NC}"
+    echo -n "你确定要继续吗? (yes/no): "
+    read -r confirmation
+    
+    if [[ "$confirmation" != "yes" ]]; then
+        echo -e "${YELLOW}操作已取消${NC}"
+        exit 0
+    fi
+    
+    return 0
+}
+
+# Function to erase SATA SSD
+erase_sata_ssd() {
+    local disk=$1
+    echo -e "\n${BLUE}${BOLD}正在执行SATA SSD安全擦除 /dev/$disk${NC}"
+    
+    # Set temporary password for secure erase
+    echo -e "\n${YELLOW}设置临时安全密码...${NC}"
+    hdparm --user-master u --security-set-pass "password" /dev/$disk
+    
+    # Check if password was set successfully
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}${BOLD}设置安全密码时出错。中止操作。${NC}"
+        exit 1
+    fi
+    
+    # Try normal secure erase first
+    echo -e "\n${YELLOW}执行安全擦除...${NC}"
+    hdparm --user-master u --security-erase "password" /dev/$disk
+    
+    # If normal secure erase failed, try enhanced secure erase
+    if [ $? -ne 0 ]; then
+        echo -e "\n${YELLOW}标准安全擦除失败。尝试增强型安全擦除...${NC}"
+        hdparm --user-master u --security-erase-enhanced "password" /dev/$disk
+        
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}${BOLD}增强型安全擦除也失败了。请检查驱动器是否支持安全擦除。${NC}"
+            exit 1
+        fi
+    fi
+    
+    echo -e "\n${GREEN}${BOLD}SATA SSD安全擦除成功完成!${NC}"
+}
+
+# Function to erase NVMe SSD
+erase_nvme_ssd() {
+    local disk=$1
+    echo -e "\n${BLUE}${BOLD}正在执行NVMe SSD安全擦除 /dev/$disk${NC}"
+    
+    # Install NVMe tools if needed
+    install_nvme_tools
+    
+    # Perform NVMe format
+    echo -e "\n${YELLOW}执行NVMe格式化命令...${NC}"
+    nvme format -s1 /dev/$disk
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}${BOLD}NVMe格式化失败。请检查驱动器是否支持格式化命令。${NC}"
+        exit 1
+    fi
+    
+    echo -e "\n${GREEN}${BOLD}NVMe SSD安全擦除成功完成!${NC}"
+}
+
+# Function to log results
+log_results() {
+    local disk=$1
+    local disk_type=$2
+    
+    # Create a timestamp
+    timestamp=$(date +"%Y-%m-%d_%H-%M-%S")
+    
+    # Create log directory if it doesn't exist
+    mkdir -p ./ssd_erase_logs
+    
+    # Prepare log file
+    log_file="./ssd_erase_logs/erase_${disk}_${timestamp}.log"
+    
+    # Log system information
+    echo "SSD擦除日志 - $timestamp" > "$log_file"
+    echo "==============================================" >> "$log_file"
+    echo "系统序列号: $(dmidecode -s system-serial-number)" >> "$log_file"
+    echo "设备: /dev/$disk" >> "$log_file"
+    echo "磁盘类型: $disk_type" >> "$log_file"
+    echo "磁盘信息: $(lsblk -o NAME,SIZE,MODEL,SERIAL,TRAN /dev/$disk | grep -v NAME)" >> "$log_file"
+    echo "擦除方法: $([ "$disk_type" == "nvme" ] && echo "NVMe Format" || echo "ATA Secure Erase")" >> "$log_file"
+    echo "擦除状态: 已完成" >> "$log_file"
+    echo "擦除时间: $timestamp" >> "$log_file"
+    echo "==============================================" >> "$log_file"
+    
+    echo -e "\n${GREEN}擦除日志已保存至: $log_file${NC}"
+    echo -e "${YELLOW}请拍摄此屏幕的照片以存档${NC}"
+}
+
+# Main function
+main() {
+    clear
+    echo -e "${BLUE}${BOLD}==========================================${NC}"
+    echo -e "${BLUE}${BOLD}        SSD数据擦除工具                  ${NC}"
+    echo -e "${BLUE}${BOLD}==========================================${NC}"
+    echo -e "${YELLOW}此工具将对选定的SSD执行安全擦除${NC}"
+    echo -e "${RED}${BOLD}警告: 所有数据将被永久删除${NC}\n"
+    
+    # Check if running as root
+    check_root
+    
+    # Get system serial number
+    get_system_serial
+    
+    # Select disk to erase
+    select_disk
+    
+    # Perform the appropriate erasure based on disk type
+    if [[ "$disk_type" == "nvme" ]]; then
+        erase_nvme_ssd "$selected_disk"
+    else
+        erase_sata_ssd "$selected_disk"
+    fi
+    
+    # Log results
+    log_results "$selected_disk" "$disk_type"
+    
+    echo -e "\n${GREEN}${BOLD}数据擦除成功完成!${NC}"
+    echo -e "${YELLOW}请记得拍摄此屏幕的照片以备存档${NC}"
+    echo -e "${BLUE}${BOLD}==========================================${NC}"
+}
+
+# Run main function
+main
