@@ -18,23 +18,23 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # 检测是否通过管道执行
-if [ -t 0 ]; then
-  # 非管道执行（用户只是下载查看）
-  echo -e "${YELLOW}${BOLD}SSD数据擦除工具脚本${NC}"
-  echo -e "${RED}警告：此脚本将执行SSD数据擦除操作，所有数据将被永久删除！${NC}"
-  echo
-  echo -e "建议先审查脚本内容，确保安全后再执行。"
-  echo -e "执行方式: ${GREEN}curl -sSL https://yourdomain.xyz/ssd-erasure | sudo bash${NC}"
-  echo
-  echo -e "${YELLOW}--- 以下是脚本内容 ---${NC}"
-  # 使用/dev/stdin来获取通过管道传输的内容
-  if [ -f "$0" ]; then
-    cat "$0"
-  else
-    echo -e "${RED}无法显示脚本内容，请直接下载脚本文件查看。${NC}"
-  fi
-  exit 0
-fi
+# if [ -t 0 ]; then
+#   # 非管道执行（用户只是下载查看）
+#   echo -e "${YELLOW}${BOLD}SSD数据擦除工具脚本${NC}"
+#   echo -e "${RED}警告：此脚本将执行SSD数据擦除操作，所有数据将被永久删除！${NC}"
+#   echo
+#   echo -e "建议先审查脚本内容，确保安全后再执行。"
+#   echo -e "执行方式: ${GREEN}curl -sSL https://yourdomain.xyz/ssd-erasure | sudo bash${NC}"
+#   echo
+#   echo -e "${YELLOW}--- 以下是脚本内容 ---${NC}"
+#   # 使用/dev/stdin来获取通过管道传输的内容
+#   if [ -f "$0" ]; then
+#     cat "$0"
+#   else
+#     echo -e "${RED}无法显示脚本内容，请直接下载脚本文件查看。${NC}"
+#   fi
+#   exit 0
+# fi
 
 # Function to check if running as root
 check_root() {
@@ -220,7 +220,7 @@ erase_nvme_ssd() {
     
     # Perform NVMe format
     echo -e "\n${YELLOW}执行NVMe格式化命令...${NC}"
-    nvme format -s1 /dev/$disk
+    nvme format --force -s1 /dev/$disk
     
     if [ $? -ne 0 ]; then
         echo -e "${RED}${BOLD}NVMe格式化失败。请检查驱动器是否支持格式化命令。${NC}"
